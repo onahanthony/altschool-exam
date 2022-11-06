@@ -1,0 +1,215 @@
+---
+
+- name: laravel-deployment
+  hosts: all
+  remote_user: root
+  vars:
+    db_user: main
+    db_password: dencoline
+    db_name: exam
+    vhost_name: laravel
+  tasks:
+    - name: update repository
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: install apache
+      apt:
+        name: apache2
+        state: latest
+
+    - name: install php and its dependencies
+      apt:
+        name:
+          - php
+          - libapache2-mod-php
+          - php8.1-xml
+          - php8.1-mysql
+          - php8.1-common
+          - php8.1-mysql
+          - php8.1-xmlrpc
+          - php8.1-curl
+          - php8.1-gd
+          - php8.1-imagick
+          - php8.1-cli
+          - php8.1-dev
+          - php8.1-imap
+          - php8.1-mbstring
+          - php8.1-opcache
+          - php8.1-soap
+          - php8.1-zip
+          - php8.1-intl
+          - unzip
+        state: latest
+
+
+    - name: option #1 install mysql
+      apt: name=mysql-server state=present update_cache=yes
+
+    - name: option #2 install mysql generic servers
+      package:
+        name: mysql-server
+        state: present
+        update_cache: yes
+      loop:
+        - mysql-server
+        - mysql-client
+        - python-mysqldb
+        - libmysqlclient-dev
+
+
+    - name: Run the mysql service
+      service:
+        name: mysql
+        state: started
+        enabled: yes
+
+    - name: create database
+      mysql_db: name={{ db_name }} login_user=root login_password=dencoman state=present
+
+    - name: create user
+      mysql_user: name={{ db_user }} password={{ db_password }} priv=*.*:ALL state=present
+
+    - name: grant user access to database
+      mysql_user: name={{ db_user }} password={{ db_password }} priv={{ db_name }}.*:ALL state=present
+
+    - name: Enable remote login to mysql
+      lineinfile:
+        path: /etc/mysql/mysql.conf.d/mysqld.cnf
+        regexp: '^bind-address'
+        line: 'bind-address = 0.0.0.0'
+        backup: yes
+      notify:
+        - restart mysql
+
+    - name: download php-composer
+      get_url:
+        url: https://getcomposer.org/installer
+        dest: /tmp/installer
+
+    - name: install composer
+      shell: cat /tmp/installer | php -- --install-dir=/usr/local/bin
+      args:
+        creates: /usr/local/bin/composer
+
+    - name: rename composer.phar to composer
+      shell: mv /usr/local/bin/composer.phar /usr/local/bin/composer
+      args:
+        creates: /usr/local/bin/composer
+
+    - name: make composer executable
+      file:
+        path: /usr/local/bin/composer
+        mode: a+x
+        state: file
+
+    - name: clone github repo
+      git:
+        repo:  https://github.com/f1amy/laravel-realworld-example-app.git
+        dest: /opt/{{ vhost_name }}
+        clone: yes
+        update: yes
+        force: yes
+        accept_hostkey: yes
+        register: repo
+
+    - name: install dependencies with composer
+      become: false
+      composer:
+        command: install
+        working_dir: /var/www/altschool
+      tags: [ 'composer:install' ]
+      when: repo.changed
+
+    - name: copy laravel project
+      shell:
+        cmd: mv /opt/{{ vhost_name }} /var/www/altschool/
+
+    - name: change permission
+      shell:
+        cmd: chown -R www-data:www-data /var/www/altschool/{{ vhost_name }}
+
+    - name: set up .env file
+      template:
+        src: .env.me
+        dest: /var/www/altschool/{{ vhost_name }}/.env.example
+
+    - name : change permission
+      shell:
+        cmd: chmod -R 775 /var/www/altschool/{{ vhost_name }}
+
+    - name: change permission
+      shell:
+        cmd:  chmod -R 775 /var/www/altschool/{{ vhost_name }}/storage
+
+    - name: change permission
+      shell:
+        cmd: chmod -R 775 /var/www/altschool/{{ vhost_name }}/bootstrap/cache
+
+    - name: remove default apache vhost config from sites-enabled
+      file:
+        name: /usr/sbin/sites_enabled/000-default.conf
+        state: absent
+
+    - name: generate artisan key
+      command: php artisan key:generate
+
+    - name: create apache vhost domain
+      template:
+        src: web.conf.j2
+        dest: "/etc/apache2/sites-available/{{ vhost_name }}.conf"
+        owner: www-data
+        group: www-data
+        mode: 0644
+      notify: Restart apache2
+
+    - name: remove comment in php file
+      copy:
+        src: webin.php
+        dest: /var/www/altschool/laravel/routes/web.php
+        owner: root
+        group: root
+        mode: 0644
+
+    - name: add my domain in hosts file
+      template:
+        src: conf.j2
+        dest: /etc/hosts
+        owner: root
+        owner: root
+        mode: 0644
+
+
+    - name: update a2ensite
+      command: a2ensite altschool.conf
+
+
+    - name: enable the apache rewrite module
+      command: a2enmod rewrite
+      notify:
+        - restart apache2
+
+    - name: cache the configuration
+      command: php artisan config:cache
+      when: repo.changed
+
+    - name: clear the view cache
+      command: php artisan view:clear
+
+    - name: run the migrations
+      command: php artisan migrate --force
+      when: repo.changed
+
+    - name: install and set up postgres
+      command: bash postgres.sh
+
+  handlers:
+    - name: restart mysql
+      service:
+        name: mysql
+        state: restarted
+
+    - name: restart apache2
+      service:
+        name: apache2
