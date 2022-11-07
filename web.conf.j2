@@ -1,0 +1,15 @@
+<VirtualHost *:80>
+    ServerAdmin admin@dencoman.me
+    ServerName dencoman.me
+    ServerAlias www.dencoman.me
+    DocumentRoot /var/www/altschool/laravel/public
+
+    <Directory /var/www/html/laravel/public>
+        Options Indexes MultiViews
+        AllowOverride None
+        Require all granted
+    </Directory>
+
+    ErrorLog ${APACHE_LOG_DIR}/error.log
+    CustomLog ${APACHE_LOG_DIR}/access.log combined
+</VirtualHost>
